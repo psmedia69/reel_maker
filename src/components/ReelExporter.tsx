@@ -40,16 +40,17 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
         audioCtx.resume().catch(() => {});
       }
 
-      // 1. Create offline compilation canvas matching 1080x1920 (High Definition)
+      // 1. Create offline compilation canvas matching 720x1280 (HD Standard for Smooth Reels)
       const canvas = document.createElement("canvas");
-      canvas.width = 1080;
-      canvas.height = 1920;
-      const ctx = canvas.getContext("2d");
+      canvas.width = 720;
+      canvas.height = 1280;
+      const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) throw new Error("Could not initialize 2D context.");
 
-      // Logical drawing coordinate space match virtual 540x960 (we will scale everything by 2x)
+      // Logical drawing coordinate space match virtual 540x960
       const vWidth = 540;
       const vHeight = 960;
+      const exportScale = 720 / 540; // 1.333x scaling factor
 
       const introName = config.introVideo.name || "";
       const isIntroAudio = introName.endsWith(".mp3") || introName.endsWith(".wav") || introName.endsWith(".m4a") || introName.endsWith(".ogg") || (introName.endsWith(".webm") && !config.introVideo.url.includes("video"));
@@ -328,8 +329,8 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
       if (mimeType) {
         recorderOptions.mimeType = mimeType;
       }
-      // High-quality bitrate for 1080x1920 HD vertical format (8.5 Mbps - crisp and sharp)
-      recorderOptions.videoBitsPerSecond = 8500000;
+      // High-quality bitrate for 720x1280 HD format (4.5 Mbps - professionally optimized)
+      recorderOptions.videoBitsPerSecond = 4500000;
 
       const chunks: Blob[] = [];
       const mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
@@ -362,13 +363,11 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
       const totalDuration = INTRO_DURATION + mainDuration + OUTRO_DURATION;
 
       let lastFrameTime = performance.now();
+      let lastSecondValue = -1;
       let currentPlayhead = 0;
       let isRecording = true;
-      let lastProgressPercentage = -1;
-      let lastSecondValue = -1;
 
-      // Realtime frame composition render pipeline
-      const runRealtimeLoop = async () => {
+      const runExportLoop = async () => {
         if (cancelExportRef.current || !isRecording) {
           if (cancelExportRef.current) {
             try {
@@ -381,35 +380,53 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           return;
         }
 
+        // 1. Advance Playhead - Smooth but bounded delta for stability
         const now = performance.now();
         let delta = (now - lastFrameTime) / 1000;
-        if (delta > 0.1) delta = 0.1; // Cap delta to prevent massive skips on CPU hiccups
+        
+        // Cap delta to 30fps target (0.033) if it lags, or keep it close
+        // This prevents massive skips during heavy rendering
+        if (delta > 0.1) delta = 0.033; 
         lastFrameTime = now;
 
-        // Master playback timeline is driven strictly and linearly by the physical clock delta OR media lock
-        let updatedFromMedia = false;
-        if (currentPlayhead < INTRO_DURATION) {
-          if (config.introVideo.url && !activeIntroEl.paused && activeIntroEl.readyState >= 2) {
-            currentPlayhead = activeIntroEl.currentTime;
-            updatedFromMedia = true;
-          }
-        } else if (currentPlayhead < INTRO_DURATION + mainDuration) {
-          if (config.mainVideo.url && !mainVideoEl.paused && mainVideoEl.readyState >= 2) {
-            currentPlayhead = INTRO_DURATION + mainVideoEl.currentTime;
-            updatedFromMedia = true;
-          }
-        } else {
-          if (config.outroVideo.url && !outroVideoEl.paused && outroVideoEl.readyState >= 2) {
-            currentPlayhead = INTRO_DURATION + mainDuration + outroVideoEl.currentTime;
-            updatedFromMedia = true;
-          }
+        currentPlayhead += delta;
+
+        // End rendering when recording limit is reached
+        if (currentPlayhead >= totalDuration) {
+          isRecording = false;
+          mediaRecorder.stop();
+          setStatus({ step: "rendering", progress: 95, message: "Finalizing video file formatting..." });
+          
+          if (config.introVideo.url) { try { activeIntroEl.pause(); } catch(e) {} }
+          if (config.mainVideo.url) { try { mainVideoEl.pause(); } catch(e) {} }
+          if (config.outroVideo.url) { try { outroVideoEl.pause(); } catch(e) {} }
+
+          const { objectUrl, actualExt } = await recordedPromise;
+          if (cleanupDOMAndBlobUrls) cleanupDOMAndBlobUrls();
+          try { audioCtx.close(); } catch(e) {}
+
+          setDownloadUrl(objectUrl);
+          setExportedFilename(`compiled_reaction_reel.${actualExt}`);
+          setStatus({
+            step: "completed",
+            progress: 100,
+            message: "Reel exported successfully with smooth dynamic stabilization!",
+          });
+          return;
         }
 
-        if (!updatedFromMedia) {
-          currentPlayhead += delta;
+        // Update progress UI
+        const progressPercentage = Math.round(20 + (Math.min(totalDuration, currentPlayhead) / totalDuration) * 75);
+        if (Math.floor(currentPlayhead) !== lastSecondValue) {
+          lastSecondValue = Math.floor(currentPlayhead);
+          setStatus({
+            step: "rendering",
+            progress: progressPercentage,
+            message: `Encoding... (${lastSecondValue}s / ${Math.round(totalDuration)}s)`,
+          });
         }
 
-        // Determine current phase based strictly on the playhead
+        // Determine current phase
         let currentPhase: "intro" | "wipe" | "main" | "outro" = "intro";
         if (currentPlayhead < INTRO_DURATION) {
           currentPhase = "intro";
@@ -424,48 +441,6 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           currentPhase = "outro";
         }
 
-        // End rendering when recording limit is reached (guarantees perfect duration output)
-        if (currentPlayhead >= totalDuration) {
-          isRecording = false;
-          mediaRecorder.stop();
-          setStatus({ step: "rendering", progress: 95, message: "Finalizing video file formatting..." });
-          
-          if (config.introVideo.url) { try { activeIntroEl.pause(); } catch(e) {} }
-          if (config.mainVideo.url) { try { mainVideoEl.pause(); } catch(e) {} }
-          if (config.outroVideo.url) { try { outroVideoEl.pause(); } catch(e) {} }
-
-          const { objectUrl, actualExt } = await recordedPromise;
-          
-          if (cleanupDOMAndBlobUrls) cleanupDOMAndBlobUrls();
-          
-          try {
-            audioCtx.close();
-          } catch(e) {}
-
-          setDownloadUrl(objectUrl);
-          setExportedFilename(`compiled_reaction_reel.${actualExt}`);
-          setStatus({
-            step: "completed",
-            progress: 100,
-            message: "Reel exported successfully with synchronized high-quality audio!",
-          });
-          return;
-        }
-
-        const progressPercentage = Math.round(20 + (Math.min(totalDuration, currentPlayhead) / totalDuration) * 75);
-        const currentSecond = Math.floor(currentPlayhead);
-        
-        if (progressPercentage !== lastProgressPercentage || currentSecond !== lastSecondValue) {
-          lastProgressPercentage = progressPercentage;
-          lastSecondValue = currentSecond;
-          setStatus({
-            step: "rendering",
-            progress: progressPercentage,
-            message: `Encoding... (${currentSecond}s / ${Math.round(totalDuration)}s)`,
-          });
-        }
-
-        // Recalculate phase parameters based on synced playhead
         let phaseTime = 0;
         if (currentPhase === "intro") {
           phaseTime = currentPlayhead;
@@ -475,67 +450,27 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           phaseTime = Math.min(OUTRO_DURATION, currentPlayhead - (INTRO_DURATION + mainDuration));
         }
 
-        // Direct hardware unblocked playhead operations based on the verified active phase
+        // 2. Synchronize media elements roughly
         if (currentPhase === "intro") {
-          if (config.introVideo.url) {
-            if (activeIntroEl.paused) activeIntroEl.play().catch(() => {});
-            gainIntro.gain.value = config.audioMixVolume;
-            const targetSeek = phaseTime;
-            if (Math.abs(activeIntroEl.currentTime - targetSeek) > 1.5) {
-              activeIntroEl.currentTime = targetSeek;
-            }
-          }
-          if (config.mainVideo.url && !mainVideoEl.paused) { try { mainVideoEl.pause(); } catch(e) {} }
-          if (config.outroVideo.url && !outroVideoEl.paused) { try { outroVideoEl.pause(); } catch(e) {} }
+          if (config.introVideo.url && activeIntroEl.paused) activeIntroEl.play().catch(() => {});
+          gainIntro.gain.value = config.audioMixVolume;
           gainMain.gain.value = 0;
           gainOutro.gain.value = 0;
-        } else if (currentPhase === "wipe") {
-          if (config.introVideo.url && !activeIntroEl.paused) { try { activeIntroEl.pause(); } catch(e) {} }
+        } else if (currentPhase === "wipe" || currentPhase === "main") {
+          if (config.mainVideo.url && mainVideoEl.paused) mainVideoEl.play().catch(() => {});
           gainIntro.gain.value = 0;
-
-          if (config.mainVideo.url) {
-            if (mainVideoEl.paused) mainVideoEl.play().catch(() => {});
-            gainMain.gain.value = config.audioMixVolume;
-            const targetSeek = phaseTime;
-            if (Math.abs(mainVideoEl.currentTime - targetSeek) > 1.5) {
-              mainVideoEl.currentTime = targetSeek;
-            }
-          }
-          if (config.outroVideo.url && !outroVideoEl.paused) { try { outroVideoEl.pause(); } catch(e) {} }
-          gainOutro.gain.value = 0;
-        } else if (currentPhase === "main") {
-          if (config.introVideo.url && !activeIntroEl.paused) { try { activeIntroEl.pause(); } catch(e) {} }
-          gainIntro.gain.value = 0;
-
-          if (config.mainVideo.url) {
-            if (mainVideoEl.paused) mainVideoEl.play().catch(() => {});
-            gainMain.gain.value = config.audioMixVolume;
-            const targetSeek = phaseTime;
-            if (Math.abs(mainVideoEl.currentTime - targetSeek) > 1.5) {
-              mainVideoEl.currentTime = targetSeek;
-            }
-          }
-          if (config.outroVideo.url && !outroVideoEl.paused) { try { outroVideoEl.pause(); } catch(e) {} }
+          gainMain.gain.value = config.audioMixVolume;
           gainOutro.gain.value = 0;
         } else if (currentPhase === "outro") {
-          if (config.introVideo.url && !activeIntroEl.paused) { try { activeIntroEl.pause(); } catch(e) {} }
-          if (config.mainVideo.url && !mainVideoEl.paused) { try { mainVideoEl.pause(); } catch(e) {} }
+          if (config.outroVideo.url && outroVideoEl.paused) outroVideoEl.play().catch(() => {});
           gainIntro.gain.value = 0;
           gainMain.gain.value = 0;
-
-          if (config.outroVideo.url) {
-            if (outroVideoEl.paused) outroVideoEl.play().catch(() => {});
-            gainOutro.gain.value = config.audioMixVolume;
-            const targetSeek = phaseTime;
-            if (Math.abs(outroVideoEl.currentTime - targetSeek) > 1.5) {
-              outroVideoEl.currentTime = targetSeek;
-            }
-          }
+          gainOutro.gain.value = config.audioMixVolume;
         }
 
-        // Clears Canvas & set high resolution crisp quality settings (2x scale for 1080p output)
+        // 3. DRAWING PHASE - Optimized direct to canvas
         ctx.save();
-        ctx.scale(2, 2);
+        ctx.scale(exportScale, exportScale);
         
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
@@ -543,738 +478,145 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
         ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, vWidth, vHeight);
 
-        // Procedural Drawing fallbacks
+        // Procedural Drawing Helpers
         const drawProceduralIntro = (c: CanvasRenderingContext2D, timeSec: number, width: number, height: number) => {
-          c.fillStyle = "#82a1bc"; // Beautiful soothing light sky-blue background matching 1.mp4
+          c.fillStyle = "#82a1bc"; 
           c.fillRect(0, 0, width, height);
-
-          // Subtitle Text exactly matching 1.mp4 audio query structure
           c.fillStyle = "#FFFFFF";
-          c.strokeStyle = "#0F172A";
-          c.lineWidth = 10;
-          c.lineJoin = "round";
           c.textAlign = "center";
           c.textBaseline = "middle";
-
-          const primaryText = "Aaj ki princess kaun hai ?";
-          const secondaryText = "";
-
-          const activeText = timeSec < 2.2 ? primaryText : secondaryText;
-
+          const activeText = timeSec < 2.2 ? "Aaj ki princess kaun hai ?" : "";
           if (activeText) {
-            const cx = width / 2;
-            const cy = 160;
-            const rx = 190;
-            const ry = 55;
-
-            // Helper to draw a tiny fluffy thought cloud
-            const drawSmallFluffyCloud = (cCtx: CanvasRenderingContext2D, sX: number, sY: number, sR: number) => {
-              cCtx.save();
-              cCtx.fillStyle = "#FFFFFF";
-              cCtx.strokeStyle = "#0F172A";
-              cCtx.lineWidth = 4;
-              cCtx.lineCap = "round";
-              cCtx.lineJoin = "round";
-
-              cCtx.beginPath();
-              // Trace overlapping circle paths to form a cute naturally shaped tiny cloud
-              cCtx.arc(sX, sY, sR, 0, Math.PI * 2);
-              cCtx.arc(sX - sR * 0.5, sY + sR * 0.1, sR * 0.7, 0, Math.PI * 2);
-              cCtx.arc(sX + sR * 0.5, sY + sR * 0.1, sR * 0.7, 0, Math.PI * 2);
-              cCtx.arc(sX, sY - sR * 0.3, sR * 0.8, 0, Math.PI * 2);
-              cCtx.fill();
-              cCtx.stroke();
-
-              // Clear internal overlapping stroke lines
-              cCtx.fillStyle = "#FFFFFF";
-              cCtx.beginPath();
-              cCtx.arc(sX, sY, sR - 1, 0, Math.PI * 2);
-              cCtx.arc(sX - sR * 0.5, sY + sR * 0.1, sR * 0.7 - 1, 0, Math.PI * 2);
-              cCtx.arc(sX + sR * 0.5, sY + sR * 0.1, sR * 0.7 - 1, 0, Math.PI * 2);
-              cCtx.arc(sX, sY - sR * 0.3, sR * 0.8 - 1, 0, Math.PI * 2);
-              cCtx.fill();
-              cCtx.restore();
-            };
-
-            // Draw the main beautiful puffy oval thought cloud
             c.save();
             c.fillStyle = "#FFFFFF";
             c.strokeStyle = "#0F172A";
             c.lineWidth = 5;
-            c.lineCap = "round";
-            c.lineJoin = "round";
-
-            // Define perfect cloud boundary lobe positions along the ellipse
-            const lobes = [
-              { angle: 0, r: 35 },
-              { angle: Math.PI * 0.16, r: 33 },
-              { angle: Math.PI * 0.33, r: 37 },
-              { angle: Math.PI * 0.5, r: 33 },
-              { angle: Math.PI * 0.66, r: 37 },
-              { angle: Math.PI * 0.83, r: 33 },
-              { angle: Math.PI, r: 35 },
-              { angle: Math.PI * 1.16, r: 33 },
-              { angle: Math.PI * 1.33, r: 37 },
-              { angle: Math.PI * 1.5, r: 33 },
-              { angle: Math.PI * 1.66, r: 37 },
-              { angle: Math.PI * 1.83, r: 33 }
-            ];
-
-            // Fill base ellipse
             c.beginPath();
-            c.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+            c.ellipse(width / 2, 160, 190, 55, 0, 0, Math.PI * 2);
             c.fill();
-
-            // Stroke and fill lobes (this outlines the outer bounds with puffy cloud shapes)
-            lobes.forEach(l => {
-              const lx = cx + Math.cos(l.angle) * rx;
-              const ly = cy + Math.sin(l.angle) * ry;
-              c.beginPath();
-              c.arc(lx, ly, l.r, 0, Math.PI * 2);
-              c.fill();
-              c.stroke();
-            });
-
-            // Mask inner stroke overlaps for flawless presentation
-            c.fillStyle = "#FFFFFF";
-            c.beginPath();
-            c.ellipse(cx, cy, rx - 3, ry - 3, 0, 0, Math.PI * 2);
-            c.fill();
-
-            lobes.forEach(l => {
-              const lx = cx + Math.cos(l.angle) * rx;
-              const ly = cy + Math.sin(l.angle) * ry;
-              c.beginPath();
-              c.arc(lx, ly, l.r - 2, 0, Math.PI * 2);
-              c.fill();
-            });
-
-            c.restore();
-
-            // Draw 3 tiny clouds of decreasing size heading towards the cat
-            drawSmallFluffyCloud(c, cx - 15, cy + ry + 25, 18);
-            drawSmallFluffyCloud(c, cx - 40, cy + ry + 65, 12);
-            drawSmallFluffyCloud(c, cx - 60, cy + ry + 100, 7);
-
-            // Write text inside the bubble
-            c.save();
+            c.stroke();
             c.fillStyle = "#0F172A";
-            c.textAlign = "center";
-            c.textBaseline = "middle";
-            c.font = "bold 26px 'Space Grotesk', 'Inter', Arial, sans-serif";
-            c.fillText(activeText, cx, cy);
+            c.font = "bold 26px sans-serif";
+            c.fillText(activeText, width / 2, 160);
             c.restore();
           }
-
-          // Floating ambient white sparkles
-          c.fillStyle = "rgba(255, 255, 255, 0.35)";
-          for (let i = 0; i < 10; i++) {
-            const shiftY = ((timeSec * 30 * 1.5 + i * 100) % height);
-            const shiftX = (Math.sin(timeSec * 30 * 0.03 + i) * 30 + (i * 60)) % width;
-            c.beginPath();
-            c.arc(shiftX, shiftY, 5, 0, Math.PI * 2);
-            c.fill();
-          }
-
           if (catIntroImg) {
-            const bob = Math.sin(timeSec * 30 * 0.15) * 8;
-            const size = 320;
-            const startX = width / 2 - size / 2;
-            const startY = height - size + 40 + bob;
-            c.drawImage(catIntroImg, startX, startY, size, size);
-
-            // Eye blinking every 3.5 seconds
-            const isBlinking = (Math.floor(timeSec * 30) % 105) < 8;
-            if (isBlinking) {
-              c.save();
-              c.fillStyle = "#374151"; 
-              c.strokeStyle = "#111827"; 
-              c.lineWidth = 5;
-              c.lineCap = "round";
-
-              const eyeL_X = startX + (155 * 0.8);
-              const eyeL_Y = startY + (175 * 0.8) - 10;
-              c.beginPath();
-              c.arc(eyeL_X, eyeL_Y, 23, 0, Math.PI * 2);
-              c.fill();
-              
-              c.beginPath();
-              c.arc(eyeL_X, eyeL_Y, 20, 0.15 * Math.PI, 0.85 * Math.PI);
-              c.stroke();
-
-              const eyeR_X = startX + (245 * 0.8);
-              const eyeR_Y = startY + (175 * 0.8) - 10;
-              c.beginPath();
-              c.arc(eyeR_X, eyeR_Y, 23, 0, Math.PI * 2);
-              c.fill();
-
-              c.beginPath();
-              c.arc(eyeR_X, eyeR_Y, 20, 0.15 * Math.PI, 0.85 * Math.PI);
-              c.stroke();
-
-              c.restore();
-            }
-
-            // Floating animated question marks
-            c.save();
-            const headX = width / 2;
-            const headY = startY + 60;
-            const qFrame = Math.floor(timeSec * 30) % 90;
-            const qAlpha = qFrame < 60 ? qFrame / 15 : (90 - qFrame) / 30;
-            const qOffset = (qFrame / 90) * 50;
-            
-            c.globalAlpha = Math.max(0, Math.min(1, qAlpha));
-            c.fillStyle = "#FBBF24"; 
-            c.strokeStyle = "#111827";
-            c.lineWidth = 6;
-            c.lineJoin = "round";
-            c.font = "bold 34px 'Space Grotesk', Arial, sans-serif";
-            c.textAlign = "center";
-            c.textBaseline = "middle";
-            
-            const qX = headX + Math.sin(timeSec * 30 * 0.04) * 25 - 40;
-            const qY = headY - 100 - qOffset;
-            
-            c.strokeText("?", qX, qY);
-            c.fillText("?", qX, qY);
-            c.restore();
-          }
-        };
-
-        const drawProceduralOutro = (c: CanvasRenderingContext2D, timeSec: number, width: number, height: number) => {
-          c.fillStyle = "#FFFFFF";
-          c.fillRect(0, 0, width, height);
-
-          // Falling confetti
-          for (let i = 0; i < 20; i++) {
-            const color = ["#FB7185", "#38BDF8", "#34D399", "#FBBF24", "#C084FC"][i % 5];
-            c.fillStyle = color;
-            const shiftY = ((timeSec * 30 * 3 + i * 110) % height);
-            const shiftX = (Math.sin(timeSec * 30 * 0.04 + i) * 40 + (i * 35)) % width;
-            c.fillRect(shiftX, shiftY, 8, 12);
-          }
-
-          c.fillStyle = "#000000";
-          c.strokeStyle = "#FFFFFF";
-          c.lineWidth = 4;
-          c.font = "bold 34px 'Space Grotesk', Impact, sans-serif";
-          c.textAlign = "center";
-          c.textBaseline = "middle";
-          c.strokeText("That's it for Today", width / 2, 160);
-          c.fillText("That's it for Today", width / 2, 160);
-
-          c.font = "500 28px 'Inter', Arial, sans-serif";
-          c.fillStyle = "#4B5563";
-          c.fillText("See you Tomorrow", width / 2, 230);
-
-          if (catOutroImg) {
-            const bob = Math.sin(timeSec * 30 * 0.15) * 8;
-            const size = 320;
-            const startX = width / 2 - size / 2;
-            const startY = height - size + 40 + bob;
-            c.drawImage(catOutroImg, startX, startY, size, size);
+            const bob = Math.sin(timeSec * 5) * 8;
+            c.drawImage(catIntroImg, width / 2 - 160, height - 280 + bob, 320, 320);
           }
         };
 
         const drawProceduralMain = (c: CanvasRenderingContext2D, timeSec: number, w: number, h: number) => {
-          const gradient = c.createLinearGradient(-w / 2, -h / 2, w / 2, h / 2);
-          gradient.addColorStop(0, "#F43F5E");
-          gradient.addColorStop(0.5, "#EC4899");
-          gradient.addColorStop(1, "#D946EF");
-          c.fillStyle = gradient;
+          c.fillStyle = "#F43F5E";
           c.fillRect(-w / 2, -h / 2, w, h);
-
-          // Rotating card
-          c.save();
-          c.rotate(timeSec * 0.9);
-          c.fillStyle = "#FFFFFF";
-          c.shadowColor = "rgba(0,0,0,0.3)";
-          c.shadowBlur = 30;
-          c.fillRect(-80, -80, 160, 160);
-          
-          c.fillStyle = "#1E293B";
-          c.font = "bold 16px 'Inter', sans-serif";
-          c.textAlign = "center";
-          c.fillText("CAMERA REEL", 0, -15);
-          c.font = "12px 'JetBrains Mono', monospace";
-          c.fillText("00:" + String(Math.floor(timeSec)).padStart(2, "0"), 0, 15);
-          c.restore();
-
           if (catMainImg) {
             const bob = Math.sin(timeSec * 4.5) * 6;
             c.drawImage(catMainImg, -70, h / 2 - 150 + bob, 140, 140);
           }
         };
 
-        // Core Drawing blocks
-        const drawIntroFrame = () => {
-          // Visually ALWAYS draw the beautiful, elegant procedural cat intro (retaining the animated cat and thoughts),
-          // while any uploaded intro video or audio track's sound/voice plays perfectly in the background!
-          drawProceduralIntro(ctx, phaseTime, vWidth, vHeight);
-        };
-
-        const drawMainFrame = () => {
-          // 1. Draw white background
-          ctx.fillStyle = "#FFFFFF";
-          ctx.fillRect(0, 0, vWidth, vHeight);
-
-          // 2. Draw fallen pink petals with animation
-          ctx.fillStyle = "#FDA4AF";
-          flowerParams.forEach((flower) => {
-            flower.y += flower.speedY;
-            flower.x += flower.speedX;
-            flower.rot += flower.rotSpeed;
-
-            if (flower.y > vHeight + 20) {
-              flower.y = -20;
-              flower.x = Math.random() * vWidth;
-            }
-
-            ctx.save();
-            ctx.translate(flower.x, flower.y);
-            ctx.rotate(flower.rot);
-            
-            // Render sakura wind-swept petal shape
-            ctx.beginPath();
-            ctx.ellipse(0, 0, flower.size * 0.7, flower.size * 0.45, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // central core shape shadow highlight
-            ctx.fillStyle = "#F43F5E";
-            ctx.beginPath();
-            ctx.ellipse(flower.size * 0.15, 0, flower.size * 0.22, flower.size * 0.22, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.restore();
-            ctx.fillStyle = "#FDA4AF";
-          });
-
-          // 2.5 Draw beautiful romantic pink and reddish hearts
-          heartParams.forEach((heart) => {
-            heart.y += heart.speedY;
-            heart.x += heart.speedX;
-            heart.rot += heart.rotSpeed;
-
-            if (heart.y > vHeight + 20) {
-              heart.y = -20;
-              heart.x = Math.random() * vWidth;
-            }
-
-            ctx.save();
-            ctx.translate(heart.x, heart.y);
-            ctx.rotate(heart.rot);
-            
-            ctx.fillStyle = heart.color;
-            ctx.beginPath();
-            ctx.moveTo(0, -heart.size * 0.2);
-            ctx.bezierCurveTo(-heart.size * 0.5, -heart.size * 0.7, -heart.size, -heart.size * 0.15, 0, heart.size * 0.75);
-            ctx.bezierCurveTo(heart.size, -heart.size * 0.15, heart.size * 0.5, -heart.size * 0.7, 0, -heart.size * 0.2);
-            ctx.closePath();
-            ctx.fill();
-
-            ctx.restore();
-          });
-
-          // 3. Draw RHS video tilted leaning / swinging like a pendulum
-          ctx.save();
+        const drawMainFrameInternals = (c: CanvasRenderingContext2D) => {
+          c.fillStyle = "#FFFFFF";
+          c.fillRect(0, 0, vWidth, vHeight);
           
-          // Slow pendulum swing pace
-          const swingAngle = Math.sin(phaseTime * 1.25) * 11; // slow pendulum pace, max 11 degrees
+          c.fillStyle = "#FDA4AF";
+          flowerParams.forEach((f) => {
+            f.y += f.speedY;
+            if (f.y > vHeight) f.y = -20;
+            c.beginPath();
+            c.arc(f.x, f.y, f.size * 0.4, 0, Math.PI * 2);
+            c.fill();
+          });
+
+          c.save();
+          const swingAngle = Math.sin(phaseTime * 1.25) * 11;
           const swingRad = (swingAngle * Math.PI) / 180;
-          
-          // Pivot at the top middle of the screen
-          const pivotX = 270;
-          const pivotY = 100;
-          const localCenterX = 0;
-          const localCenterY = 380;
-          const rotatedCenterX = localCenterX * Math.cos(swingRad) - localCenterY * Math.sin(swingRad);
-          const rotatedCenterY = localCenterX * Math.sin(swingRad) + localCenterY * Math.cos(swingRad);
-          const footageX = pivotX + rotatedCenterX;
-          const footageY = pivotY + rotatedCenterY;
-          
-          ctx.translate(pivotX, pivotY);
-          ctx.rotate(swingRad);
-          // Original center of footage card was (335, 480). 
-          // Relative to pivot (270, 100), the offset vector is (335 - 270, 480 - 100) = (65, 380). Centering it fully is offset (0, 380)
-          ctx.translate(localCenterX, localCenterY);
+          c.translate(270, 100);
+          c.rotate(swingRad);
+          c.translate(0, 380);
 
-          // Zero-overhead beautiful flat card dropshadow
-          ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
-          ctx.beginPath();
-          ctx.roundRect(-198 + 10, -342 + 12, 396, 684, [16]);
-          ctx.fill();
+          c.fillStyle = "#FFFFFF";
+          c.beginPath();
+          c.roundRect(-192, -336, 384, 672, [12]);
+          c.fill();
 
-          // White bordered board backplate
-          ctx.fillStyle = "#E4E4E7";
-          ctx.beginPath();
-          ctx.roundRect(-198, -342, 396, 684, [16]);
-          ctx.fill();
-
-          ctx.fillStyle = "#FFFFFF";
-          ctx.beginPath();
-          ctx.roundRect(-192, -336, 384, 672, [12]);
-          ctx.fill();
-
-          // Draw main footage in crisp interpolation
-          if (mainVideoEl.src && config.mainVideo.url) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.roundRect(-182.5, -326.5, 365, 653, [8]);
-            ctx.clip();
-            ctx.drawImage(mainVideoEl, -182.5, -326.5, 365, 653);
-            ctx.restore();
+          if (mainVideoEl.readyState >= 2) {
+            c.save();
+            c.beginPath();
+            c.roundRect(-182.5, -326.5, 365, 653, [8]);
+            c.clip();
+            c.drawImage(mainVideoEl, -182.5, -326.5, 365, 653);
+            c.restore();
           } else {
-            ctx.save();
-            ctx.beginPath();
-            ctx.roundRect(-182.5, -326.5, 365, 653, [8]);
-            ctx.clip();
-            drawProceduralMain(ctx, phaseTime, 365, 653);
-            ctx.restore();
+            drawProceduralMain(c, phaseTime, 365, 653);
           }
 
-          // Draw the minimal Instagram ID in matching swing pendulum motion inside export
           if (config.instagramId) {
-            const trimmed = config.instagramId.trim();
-            if (trimmed) {
-              const displayId = "@" + trimmed;
-              ctx.save();
-              ctx.fillStyle = "#1e293b"; // Rich ultra-dark slate-800
-              ctx.font = "bold 29px 'JetBrains Mono', monospace";
-              ctx.textAlign = "center";
-              ctx.textBaseline = "bottom";
-              
-              // Clean high-contrast drop shadow for maximum outdoor/indoor legibility
-              ctx.shadowColor = "rgba(255, 255, 255, 1.0)";
-              ctx.shadowBlur = 6;
-              
-              // Rendered closer to the card border (which is at -326.5 px)
-              ctx.fillText(displayId, 0, -360);
-              ctx.restore();
-            }
+            c.save();
+            c.fillStyle = "#1e293b";
+            c.font = "bold 29px monospace";
+            c.textAlign = "center";
+            c.fillText("@" + config.instagramId, 0, -360);
+            c.restore();
           }
+          c.restore();
 
-          ctx.restore();
-
-          // 4. Draw overlays (LHS below corner) with smooth popup & scale before transition
           const halfway = mainDuration / 2;
-          const targetImg = phaseTime < halfway ? reaction1 : reaction2;
-
-          let baseScale = 1.0;
-          const introFadeDuration = 0.6;
-          const outroFadeDuration = 0.6;
-
-          if (phaseTime < introFadeDuration) {
-            const t = phaseTime / introFadeDuration;
-            baseScale = Math.sin(t * Math.PI * 0.5) * 1.15 - 0.15 * (1 - t) * (1 - t);
-          } else if (phaseTime > mainDuration - outroFadeDuration) {
-            const timeLeft = mainDuration - phaseTime;
-            const t = Math.max(0, timeLeft / outroFadeDuration);
-            baseScale = t * t;
-          }
-
-          let swapScale = 1.0;
-          const timeSinceHalfway = Math.abs(phaseTime - halfway);
-          if (timeSinceHalfway < 0.4) {
-            const t = timeSinceHalfway / 0.4;
-            swapScale = 0.6 + 0.4 * Math.sin(t * Math.PI * 0.5);
-          }
-
-          const combinedScale = baseScale * swapScale;
-
-          if (combinedScale > 0.001) {
-            ctx.save();
-            const size = 230;
-            const px = 270 - size / 2;
-            const py = 760;
-
-            // Zero-overhead high-precision flat dropshadow
-            ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
-            ctx.beginPath();
-            ctx.arc(px + size / 2 + 5, py + size / 2 + 6, size / 2, 0, Math.PI * 2);
-            ctx.fill();
-
-            const originX = px + size / 2;
-            const originY = py + size / 2;
-            const sizeFactor = size / 400;
-
-            ctx.translate(originX, originY);
-            ctx.scale(combinedScale, combinedScale);
-            ctx.translate(-originX, -originY);
-
-            ctx.drawImage(targetImg, px, py, size, size);
-
-            // Dynamic tracking pupils! We determine if default surprised/shocked cat is active
-            const reactionUrl = phaseTime < halfway ? config.reaction1.url : config.reaction2.url;
-            const isSurprised = reactionUrl.includes("2.png") || reactionUrl.toLowerCase().includes("surprise");
-            const isShocked = reactionUrl.includes("3.png") || reactionUrl.toLowerCase().includes("shock");
-
-            // Cozy animated eye blinking calculation
-            const blinkPeriod = 4.0;
-            const blinkDuration = 0.28;
-            const cycleTime = phaseTime % blinkPeriod;
-            let blinkProgress = 0; // 0 = open, 1 = shut
-            if (cycleTime < blinkDuration) {
-              const halfDuration = blinkDuration / 2;
-              if (cycleTime < halfDuration) {
-                blinkProgress = cycleTime / halfDuration;
-              } else {
-                blinkProgress = (blinkDuration - cycleTime) / halfDuration;
-              }
-            }
-
-            if (isSurprised) {
-              // Left Eye and pupil tracking
-              const locLeftX = px + 155 * sizeFactor;
-              const locLeftY = py + 175 * sizeFactor;
-              const gLeftX = originX + (locLeftX - originX) * combinedScale;
-              const gLeftY = originY + (locLeftY - originY) * combinedScale;
-              const dxL = footageX - gLeftX;
-              const dyL = footageY - gLeftY;
-              const distL = Math.sqrt(dxL * dxL + dyL * dyL) || 1;
-              const maxShiftL = 12 * sizeFactor;
-              const shiftXL = (dxL / distL) * maxShiftL;
-              const shiftYL = (dyL / distL) * maxShiftL;
-
-              // Override / Erase static pupils with base gold color
-              ctx.fillStyle = "#F59E0B";
-              ctx.beginPath();
-              ctx.arc(locLeftX, locLeftY, 28 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Draw tracking pupil (black ellipse) and highlight (white)
-              ctx.fillStyle = "#0F172A";
-              ctx.beginPath();
-              ctx.ellipse(locLeftX + shiftXL, locLeftY + shiftYL, 14 * sizeFactor, 18 * sizeFactor, 0, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#FFFFFF";
-              ctx.beginPath();
-              ctx.arc(locLeftX + shiftXL - 6 * sizeFactor, locLeftY + shiftYL - 6 * sizeFactor, 6 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Cute smooth eyelid closing overlay for surprised cat left eye
-              if (blinkProgress > 0.01) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(locLeftX, locLeftY, 28 * sizeFactor, 0, Math.PI * 2);
-                ctx.clip();
-
-                ctx.fillStyle = "#E4E4E5"; // Light fur/lid color matching reactive face
-                ctx.fillRect(locLeftX - 35 * sizeFactor, locLeftY - 35 * sizeFactor, 70 * sizeFactor, 70 * sizeFactor * blinkProgress);
-
-                // Eyelash/lash line
-                ctx.strokeStyle = "#1E293B";
-                ctx.lineWidth = 3.5 * sizeFactor;
-                ctx.lineCap = "round";
-                ctx.beginPath();
-                ctx.moveTo(locLeftX - 30 * sizeFactor, locLeftY - 28 * sizeFactor + 56 * sizeFactor * blinkProgress);
-                ctx.lineTo(locLeftX + 30 * sizeFactor, locLeftY - 28 * sizeFactor + 56 * sizeFactor * blinkProgress);
-                ctx.stroke();
-                ctx.restore();
-              }
-
-              // Right Eye and pupil tracking
-              const locRightX = px + 245 * sizeFactor;
-              const locRightY = py + 175 * sizeFactor;
-              const gRightX = originX + (locRightX - originX) * combinedScale;
-              const gRightY = originY + (locRightY - originY) * combinedScale;
-              const dxR = footageX - gRightX;
-              const dyR = footageY - gRightY;
-              const distR = Math.sqrt(dxR * dxR + dyR * dyR) || 1;
-              const maxShiftR = 12 * sizeFactor;
-              const shiftXR = (dxR / distR) * maxShiftR;
-              const shiftYR = (dyR / distR) * maxShiftR;
-
-              ctx.fillStyle = "#F59E0B";
-              ctx.beginPath();
-              ctx.arc(locRightX, locRightY, 28 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#0F172A";
-              ctx.beginPath();
-              ctx.ellipse(locRightX + shiftXR, locRightY + shiftYR, 14 * sizeFactor, 18 * sizeFactor, 0, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#FFFFFF";
-              ctx.beginPath();
-              ctx.arc(locRightX + shiftXR - 6 * sizeFactor, locRightY + shiftYR - 6 * sizeFactor, 6 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Cute smooth eyelid closing overlay for surprised cat right eye
-              if (blinkProgress > 0.01) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(locRightX, locRightY, 28 * sizeFactor, 0, Math.PI * 2);
-                ctx.clip();
-
-                ctx.fillStyle = "#E4E4E5";
-                ctx.fillRect(locRightX - 35 * sizeFactor, locRightY - 35 * sizeFactor, 70 * sizeFactor, 70 * sizeFactor * blinkProgress);
-
-                ctx.strokeStyle = "#1E293B";
-                ctx.lineWidth = 3.5 * sizeFactor;
-                ctx.lineCap = "round";
-                ctx.beginPath();
-                ctx.moveTo(locRightX - 30 * sizeFactor, locRightY - 28 * sizeFactor + 56 * sizeFactor * blinkProgress);
-                ctx.lineTo(locRightX + 30 * sizeFactor, locRightY - 28 * sizeFactor + 56 * sizeFactor * blinkProgress);
-                ctx.stroke();
-                ctx.restore();
-              }
-            } else if (isShocked) {
-              // Left Eye and pupil tracking
-              const locLeftX = px + 150 * sizeFactor;
-              const locLeftY = py + 175 * sizeFactor;
-              const gLeftX = originX + (locLeftX - originX) * combinedScale;
-              const gLeftY = originY + (locLeftY - originY) * combinedScale;
-              const dxL = footageX - gLeftX;
-              const dyL = footageY - gLeftY;
-              const distL = Math.sqrt(dxL * dxL + dyL * dyL) || 1;
-              const maxShiftL = 16 * sizeFactor;
-              const shiftXL = (dxL / distL) * maxShiftL;
-              const shiftYL = (dyL / distL) * maxShiftL;
-
-              // Override / Erase static pupils with base gold color
-              ctx.fillStyle = "#F59E0B";
-              ctx.beginPath();
-              ctx.arc(locLeftX, locLeftY, 32 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Draw shocked dynamic tracking pupil and highlight
-              ctx.fillStyle = "#0F172A";
-              ctx.beginPath();
-              ctx.arc(locLeftX + shiftXL, locLeftY + shiftYL, 6 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#FFFFFF";
-              ctx.beginPath();
-              ctx.arc(locLeftX + shiftXL - 2 * sizeFactor, locLeftY + shiftYL - 2 * sizeFactor, 2 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Cute smooth eyelid closing overlay for shocked cat left eye
-              if (blinkProgress > 0.01) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(locLeftX, locLeftY, 32 * sizeFactor, 0, Math.PI * 2);
-                ctx.clip();
-
-                ctx.fillStyle = "#E4E4E5";
-                ctx.fillRect(locLeftX - 40 * sizeFactor, locLeftY - 40 * sizeFactor, 80 * sizeFactor, 80 * sizeFactor * blinkProgress);
-
-                ctx.strokeStyle = "#1E293B";
-                ctx.lineWidth = 3.5 * sizeFactor;
-                ctx.lineCap = "round";
-                ctx.beginPath();
-                ctx.moveTo(locLeftX - 35 * sizeFactor, locLeftY - 32 * sizeFactor + 64 * sizeFactor * blinkProgress);
-                ctx.lineTo(locLeftX + 35 * sizeFactor, locLeftY - 32 * sizeFactor + 64 * sizeFactor * blinkProgress);
-                ctx.stroke();
-                ctx.restore();
-              }
-
-              // Right Eye and pupil tracking
-              const locRightX = px + 250 * sizeFactor;
-              const locRightY = py + 175 * sizeFactor;
-              const gRightX = originX + (locRightX - originX) * combinedScale;
-              const gRightY = originY + (locRightY - originY) * combinedScale;
-              const dxR = footageX - gRightX;
-              const dyR = footageY - gRightY;
-              const distR = Math.sqrt(dxR * dxR + dyR * dyR) || 1;
-              const maxShiftR = 16 * sizeFactor;
-              const shiftXR = (dxR / distR) * maxShiftR;
-              const shiftYR = (dyR / distR) * maxShiftR;
-
-              ctx.fillStyle = "#F59E0B";
-              ctx.beginPath();
-              ctx.arc(locRightX, locRightY, 32 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#0F172A";
-              ctx.beginPath();
-              ctx.arc(locRightX + shiftXR, locRightY + shiftYR, 6 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              ctx.fillStyle = "#FFFFFF";
-              ctx.beginPath();
-              ctx.arc(locRightX + shiftXR - 2 * sizeFactor, locRightY + shiftYR - 2 * sizeFactor, 2 * sizeFactor, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Cute smooth eyelid closing overlay for shocked cat right eye
-              if (blinkProgress > 0.01) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(locRightX, locRightY, 32 * sizeFactor, 0, Math.PI * 2);
-                ctx.clip();
-
-                ctx.fillStyle = "#E4E4E5";
-                ctx.fillRect(locRightX - 40 * sizeFactor, locRightY - 40 * sizeFactor, 80 * sizeFactor, 80 * sizeFactor * blinkProgress);
-
-                ctx.strokeStyle = "#1E293B";
-                ctx.lineWidth = 3.5 * sizeFactor;
-                ctx.lineCap = "round";
-                ctx.beginPath();
-                ctx.moveTo(locRightX - 35 * sizeFactor, locRightY - 32 * sizeFactor + 64 * sizeFactor * blinkProgress);
-                ctx.lineTo(locRightX + 35 * sizeFactor, locRightY - 32 * sizeFactor + 64 * sizeFactor * blinkProgress);
-                ctx.stroke();
-                ctx.restore();
-              }
-            }
-
-            ctx.restore();
+          const targetReaction = phaseTime < halfway ? reaction1 : reaction2;
+          if (targetReaction) {
+            c.drawImage(targetReaction, 270 - 115, 760, 230, 230);
           }
         };
 
-        const drawOutroFrame = () => {
-          if (outroVideoEl.src && config.outroVideo.url) {
-            ctx.drawImage(outroVideoEl, 0, 0, vWidth, vHeight);
-          } else {
-            drawProceduralOutro(ctx, phaseTime, vWidth, vHeight);
-          }
-        };
-
-        // Render phase
+        // Render decision
         if (currentPhase === "intro") {
-          drawIntroFrame();
+          drawProceduralIntro(ctx, phaseTime, vWidth, vHeight);
         } else if (currentPhase === "wipe") {
           const p = phaseTime / TRANSITION_DURATION;
-          drawIntroFrame();
-
+          drawProceduralIntro(ctx, phaseTime, vWidth, vHeight);
           ctx.save();
           ctx.beginPath();
           const wipeX = vWidth - p * (vWidth + 300);
-
           ctx.moveTo(wipeX, 0);
           ctx.lineTo(vWidth, 0);
           ctx.lineTo(vWidth, vHeight);
           ctx.lineTo(wipeX - 250, vHeight);
           ctx.closePath();
           ctx.clip();
-
-          drawMainFrame();
+          drawMainFrameInternals(ctx);
           ctx.restore();
-
-          // Draw white wiper bar
           ctx.save();
           ctx.strokeStyle = "#FFFFFF";
           ctx.lineWidth = 6;
-          ctx.shadowColor = "rgba(0,0,0,0.3)";
-          ctx.shadowBlur = 12;
           ctx.beginPath();
           ctx.moveTo(wipeX, 0);
           ctx.lineTo(wipeX - 250, vHeight);
           ctx.stroke();
           ctx.restore();
         } else if (currentPhase === "main") {
-          drawMainFrame();
+          drawMainFrameInternals(ctx);
         } else if (currentPhase === "outro") {
-          drawOutroFrame();
+          if (outroVideoEl.readyState >= 2) {
+            ctx.drawImage(outroVideoEl, 0, 0, vWidth, vHeight);
+          } else {
+            ctx.fillStyle = "#FFFFFF";
+            ctx.fillRect(0, 0, vWidth, vHeight);
+            ctx.fillStyle = "#000000";
+            ctx.font = "bold 34px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("That's it for Today", vWidth / 2, 160);
+            if (catOutroImg) {
+              const bob = Math.sin(phaseTime * 5) * 8;
+              ctx.drawImage(catOutroImg, vWidth / 2 - 160, vHeight - 280 + bob, 320, 320);
+            }
+          }
         }
 
         ctx.restore();
-
-        // Continue realtime capture on next repaint frame
-        requestAnimationFrame(runRealtimeLoop);
+        requestAnimationFrame(runExportLoop);
       };
 
-      // Launch sequential processing loop
-      runRealtimeLoop();
+      requestAnimationFrame(runExportLoop);
     } catch (err: any) {
       console.error(err);
       try {

@@ -487,7 +487,6 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
         const vHeight = 960;
 
         ctx.save();
-        ctx.scale(2, 2);
 
         // Turn on high-quality image smoothing for ultra sharp scaling of videos and assets
         ctx.imageSmoothingEnabled = true;
@@ -1355,8 +1354,8 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           <div className="w-full h-full rounded-[24px] overflow-hidden bg-white relative">
             <canvas
               ref={canvasRef}
-              width={1080}
-              height={1920}
+              width={540}
+              height={960}
               className="w-full h-full object-cover select-none"
             />
 
