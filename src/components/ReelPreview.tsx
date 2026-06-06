@@ -487,10 +487,11 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
         const vHeight = 960;
 
         ctx.save();
+        ctx.scale(2, 2);
 
         // Turn on high-quality image smoothing for ultra sharp scaling of videos and assets
         ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "medium";
+        ctx.imageSmoothingQuality = "high";
 
         // Clear canvas base (fill entire 540x960 logical space)
         ctx.fillStyle = "#FFFFFF";
@@ -1354,8 +1355,8 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           <div className="w-full h-full rounded-[24px] overflow-hidden bg-white relative">
             <canvas
               ref={canvasRef}
-              width={540}
-              height={960}
+              width={1080}
+              height={1920}
               className="w-full h-full object-cover select-none"
             />
 

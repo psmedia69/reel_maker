@@ -40,14 +40,14 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
         audioCtx.resume().catch(() => {});
       }
 
-      // 1. Create offline compilation canvas matching 540x960 logical space for ultra-lightweight, smooth recording
+      // 1. Create offline compilation canvas matching 1080x1920 (High Definition)
       const canvas = document.createElement("canvas");
-      canvas.width = 540;
-      canvas.height = 960;
+      canvas.width = 1080;
+      canvas.height = 1920;
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Could not initialize 2D context.");
 
-      // Logical drawing coordinate space match virtual 540x960
+      // Logical drawing coordinate space match virtual 540x960 (we will scale everything by 2x)
       const vWidth = 540;
       const vHeight = 960;
 
@@ -328,8 +328,8 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
       if (mimeType) {
         recorderOptions.mimeType = mimeType;
       }
-      // Optimized bitrate for 540x960 vertical format (1.8 Mbps - extremely sharp and very lightweight)
-      recorderOptions.videoBitsPerSecond = 1800000;
+      // High-quality bitrate for 1080x1920 HD vertical format (8.5 Mbps - crisp and sharp)
+      recorderOptions.videoBitsPerSecond = 8500000;
 
       const chunks: Blob[] = [];
       const mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
@@ -533,9 +533,9 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           }
         }
 
-        // Clears Canvas & set high resolution crisp quality settings (1:1 scale for maximum performance and no upscaling lag)
+        // Clears Canvas & set high resolution crisp quality settings (2x scale for 1080p output)
         ctx.save();
-        ctx.scale(1, 1);
+        ctx.scale(2, 2);
         
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
