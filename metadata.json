@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Reel Maker",
+  "description": "An interactive tool to create custom social reels with animated intros, outros, tilted footage, and reaction overlays.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
