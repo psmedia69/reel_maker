@@ -411,6 +411,10 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           lastPhaseRef.current = currentPhase;
         }
 
+        const CROSSFADE_DURATION = 0.5;
+        const mainEndTime = INTRO_DURATION + mainDuration;
+        const inCrossfadeToOutro = currentVal >= mainEndTime - CROSSFADE_DURATION && currentVal < mainEndTime;
+
         // Active playing video synchronization done elegantly without continuous seeking!
         if (isPlayingRef.current) {
           if (currentPhase === "intro") {
@@ -446,8 +450,24 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
               if (isPhaseChanged || Math.abs(mainVideo.currentTime - targetSeek) > 1.5) {
                 mainVideo.currentTime = targetSeek;
               }
+
+              // Audio fade out for main video
+              if (inCrossfadeToOutro) {
+                const fadeProgress = (currentVal - (mainEndTime - CROSSFADE_DURATION)) / CROSSFADE_DURATION;
+                mainVideo.volume = config.audioMixVolume * (1 - fadeProgress);
+              } else {
+                mainVideo.volume = config.audioMixVolume;
+              }
             }
-            if (outroVideo && config.outroVideo.url && !outroVideo.paused) { outroVideo.pause(); outroVideo.muted = true; }
+
+            // Pre-start outro video for crossfade
+            if (inCrossfadeToOutro && outroVideo && config.outroVideo.url) {
+              if (outroVideo.paused) outroVideo.play().catch(() => {});
+              outroVideo.muted = true; // Stay muted during visual crossfade background load
+              outroVideo.currentTime = currentVal - mainEndTime + CROSSFADE_DURATION;
+            } else if (!inCrossfadeToOutro && outroVideo && config.outroVideo.url && !outroVideo.paused) {
+              outroVideo.pause();
+            }
           } 
           else if (currentPhase === "outro") {
             if (introVideo && config.introVideo.url && !introVideo.paused) { introVideo.pause(); introVideo.muted = true; }
@@ -455,6 +475,15 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
             if (outroVideo && config.outroVideo.url) {
               if (outroVideo.paused) outroVideo.play().catch(() => {});
               outroVideo.muted = false;
+              
+              // Audio fade in for outro video
+              const fadeDuration = 0.4;
+              if (phaseTime < fadeDuration) {
+                outroVideo.volume = config.audioMixVolume * (phaseTime / fadeDuration);
+              } else {
+                outroVideo.volume = config.audioMixVolume;
+              }
+
               const targetSeek = Math.min(outroVideo.duration || OUTRO_DURATION, phaseTime);
               if (isPhaseChanged || Math.abs(outroVideo.currentTime - targetSeek) > 1.5) {
                 outroVideo.currentTime = targetSeek;
@@ -1227,7 +1256,16 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           ctx.restore();
         } 
         else if (currentPhase === "main") {
-          drawMainFrame();
+          if (inCrossfadeToOutro) {
+            const p = (currentVal - (mainEndTime - CROSSFADE_DURATION)) / CROSSFADE_DURATION;
+            drawMainFrame();
+            ctx.save();
+            ctx.globalAlpha = p;
+            drawOutroFrame();
+            ctx.restore();
+          } else {
+            drawMainFrame();
+          }
         } 
         else if (currentPhase === "outro") {
           drawOutroFrame();

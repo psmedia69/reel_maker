@@ -429,6 +429,10 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
 
         // Determine current phase
         let currentPhase: "intro" | "wipe" | "main" | "outro" = "intro";
+        const CROSSFADE_DURATION = 0.5;
+        const mainEndTime = INTRO_DURATION + mainDuration;
+        const inCrossfadeToOutro = currentPlayhead >= mainEndTime - CROSSFADE_DURATION && currentPlayhead < mainEndTime;
+
         if (currentPlayhead < INTRO_DURATION) {
           currentPhase = "intro";
         } else if (currentPlayhead < INTRO_DURATION + mainDuration) {
@@ -451,7 +455,7 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           phaseTime = Math.min(OUTRO_DURATION, currentPlayhead - (INTRO_DURATION + mainDuration));
         }
 
-        // 2. Synchronize media elements roughly
+        // 2. Synchronize media elements roughly with high-precision audio cross-fading
         if (currentPhase === "intro") {
           if (config.introVideo.url && activeIntroEl.paused) activeIntroEl.play().catch(() => {});
           gainIntro.gain.value = config.audioMixVolume;
@@ -459,9 +463,20 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           gainOutro.gain.value = 0;
         } else if (currentPhase === "wipe" || currentPhase === "main") {
           if (config.mainVideo.url && mainVideoEl.paused) mainVideoEl.play().catch(() => {});
-          gainIntro.gain.value = 0;
-          gainMain.gain.value = config.audioMixVolume;
-          gainOutro.gain.value = 0;
+          
+          if (inCrossfadeToOutro) {
+            const p = (currentPlayhead - (mainEndTime - CROSSFADE_DURATION)) / CROSSFADE_DURATION;
+            gainMain.gain.value = config.audioMixVolume * (1 - p);
+            gainOutro.gain.value = config.audioMixVolume * p;
+            if (config.outroVideo.url && outroVideoEl.paused) {
+              outroVideoEl.play().catch(() => {});
+              outroVideoEl.currentTime = currentPlayhead - mainEndTime + CROSSFADE_DURATION;
+            }
+          } else {
+            gainIntro.gain.value = 0;
+            gainMain.gain.value = config.audioMixVolume;
+            gainOutro.gain.value = 0;
+          }
         } else if (currentPhase === "outro") {
           if (config.outroVideo.url && outroVideoEl.paused) outroVideoEl.play().catch(() => {});
           gainIntro.gain.value = 0;
@@ -569,6 +584,23 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           }
         };
 
+        const drawOutroFrameInternals = (c: CanvasRenderingContext2D) => {
+          if (outroVideoEl.readyState >= 2) {
+            c.drawImage(outroVideoEl, 0, 0, vWidth, vHeight);
+          } else {
+            c.fillStyle = "#FFFFFF";
+            c.fillRect(0, 0, vWidth, vHeight);
+            c.fillStyle = "#000000";
+            c.font = "bold 34px sans-serif";
+            c.textAlign = "center";
+            c.fillText("That's it for Today", vWidth / 2, 160);
+            if (catOutroImg) {
+              const bob = Math.sin(phaseTime * 5) * 8;
+              c.drawImage(catOutroImg, vWidth / 2 - 160, vHeight - 280 + bob, 320, 320);
+            }
+          }
+        };
+
         // Render decision
         if (currentPhase === "intro") {
           drawProceduralIntro(ctx, phaseTime, vWidth, vHeight);
@@ -595,22 +627,18 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           ctx.stroke();
           ctx.restore();
         } else if (currentPhase === "main") {
-          drawMainFrameInternals(ctx);
-        } else if (currentPhase === "outro") {
-          if (outroVideoEl.readyState >= 2) {
-            ctx.drawImage(outroVideoEl, 0, 0, vWidth, vHeight);
+          if (inCrossfadeToOutro) {
+            const p = (currentPlayhead - (mainEndTime - CROSSFADE_DURATION)) / CROSSFADE_DURATION;
+            drawMainFrameInternals(ctx);
+            ctx.save();
+            ctx.globalAlpha = p;
+            drawOutroFrameInternals(ctx);
+            ctx.restore();
           } else {
-            ctx.fillStyle = "#FFFFFF";
-            ctx.fillRect(0, 0, vWidth, vHeight);
-            ctx.fillStyle = "#000000";
-            ctx.font = "bold 34px sans-serif";
-            ctx.textAlign = "center";
-            ctx.fillText("That's it for Today", vWidth / 2, 160);
-            if (catOutroImg) {
-              const bob = Math.sin(phaseTime * 5) * 8;
-              ctx.drawImage(catOutroImg, vWidth / 2 - 160, vHeight - 280 + bob, 320, 320);
-            }
+            drawMainFrameInternals(ctx);
           }
+        } else if (currentPhase === "outro") {
+          drawOutroFrameInternals(ctx);
         }
 
         ctx.restore();
