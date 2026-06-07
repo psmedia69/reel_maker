@@ -40,17 +40,17 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
         audioCtx.resume().catch(() => {});
       }
 
-      // 1. Create offline compilation canvas matching 720x1280 (HD Standard for Smooth Reels)
+      // 1. Create offline compilation canvas matching 1080x1920 (Full HD for Premium Reels)
       const canvas = document.createElement("canvas");
-      canvas.width = 720;
-      canvas.height = 1280;
+      canvas.width = 1080;
+      canvas.height = 1920;
       const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) throw new Error("Could not initialize 2D context.");
 
       // Logical drawing coordinate space match virtual 540x960
       const vWidth = 540;
       const vHeight = 960;
-      const exportScale = 720 / 540; // 1.333x scaling factor
+      const exportScale = 1080 / 540; // 2.0x scaling factor (Full HD)
 
       const introName = config.introVideo.name || "";
       const isIntroAudio = introName.endsWith(".mp3") || introName.endsWith(".wav") || introName.endsWith(".m4a") || introName.endsWith(".ogg") || (introName.endsWith(".webm") && !config.introVideo.url.includes("video"));
@@ -329,8 +329,8 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
       if (mimeType) {
         recorderOptions.mimeType = mimeType;
       }
-      // High-quality bitrate for 720x1280 HD format (4.5 Mbps - professionally optimized)
-      recorderOptions.videoBitsPerSecond = 4500000;
+      // High-quality bitrate for 1080x1920 Full HD format (6 Mbps - professionally optimized for quality and performance)
+      recorderOptions.videoBitsPerSecond = 6000000;
 
       const chunks: Blob[] = [];
       const mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
@@ -380,15 +380,16 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           return;
         }
 
-        // 1. Advance Playhead - Smooth but bounded delta for stability
+        // 1. Advance Playhead - High-precision fixed-step advancement for encoding stability
         const now = performance.now();
         let delta = (now - lastFrameTime) / 1000;
         
-        // Cap delta to 30fps target (0.033) if it lags, or keep it close
-        // This prevents massive skips during heavy rendering
-        if (delta > 0.1) delta = 0.033; 
+        // Cap delta to roughly 30fps (0.033) if the refresh rate is higher or lower
+        // This ensures the virtual timeline stays perfectly indexed to the recorder's 30fps expectation
+        if (delta > 0.04) delta = 0.033;
+        if (delta < 0.01) delta = 0.016; // Minimum step to avoid zero-delta freezes
+        
         lastFrameTime = now;
-
         currentPlayhead += delta;
 
         // End rendering when recording limit is reached
@@ -473,7 +474,7 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
         ctx.scale(exportScale, exportScale);
         
         ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
+        ctx.imageSmoothingQuality = "medium";
 
         ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, vWidth, vHeight);
