@@ -858,35 +858,35 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           // Zero-overhead flat deep shadow (looks exceptionally clean & modern, 100% lag-free)
           ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
           ctx.beginPath();
-          ctx.roundRect(-198 + 10, -342 + 12, 396, 684, [16]);
+          ctx.roundRect(-218 + 10, -376 + 12, 436, 752, [16]);
           ctx.fill();
           
           ctx.fillStyle = "#E4E4E7";
           ctx.beginPath();
-          ctx.roundRect(-198, -342, 396, 684, [16]);
+          ctx.roundRect(-218, -376, 436, 752, [16]);
           ctx.fill();
 
           ctx.fillStyle = "#FFFFFF";
           ctx.beginPath();
-          ctx.roundRect(-192, -336, 384, 672, [12]);
+          ctx.roundRect(-211, -370, 422, 740, [12]);
           ctx.fill();
 
           if (mainVideoEl.current && config.mainVideo.url) {
             ctx.save();
             ctx.beginPath();
-            ctx.roundRect(-182.5, -326.5, 365, 653, [8]);
+            ctx.roundRect(-201, -359, 402, 718, [8]);
             ctx.clip();
 
             // Draw current active original source video in full crisp resolution!
-            ctx.drawImage(mainVideoEl.current, -182.5, -326.5, 365, 653);
+            ctx.drawImage(mainVideoEl.current, -201, -359, 402, 718);
             ctx.restore();
           } else {
             ctx.save();
             ctx.beginPath();
-            ctx.roundRect(-182.5, -326.5, 365, 653, [8]);
+            ctx.roundRect(-201, -359, 402, 718, [8]);
             ctx.clip();
 
-            drawProceduralMain(ctx, phaseTime, 365, 653);
+            drawProceduralMain(ctx, phaseTime, 402, 718);
             ctx.restore();
           }
 
@@ -897,7 +897,7 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
               const displayId = "@" + trimmed;
               ctx.save();
               ctx.fillStyle = "#1e293b"; // Rich ultra-dark slate-800
-              ctx.font = "bold 29px 'JetBrains Mono', monospace";
+              ctx.font = "bold 32px 'JetBrains Mono', monospace";
               ctx.textAlign = "center";
               ctx.textBaseline = "bottom";
               
@@ -905,8 +905,8 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
               ctx.shadowColor = "rgba(255, 255, 255, 1.0)";
               ctx.shadowBlur = 6;
               
-              // Rendered closer to the card border (which is at -326.5 px)
-              ctx.fillText(displayId, 0, -360);
+              // Rendered closer to the card border
+              ctx.fillText(displayId, 0, -382);
               ctx.restore();
             }
           }
@@ -947,7 +947,7 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           const targetImg = activeReaction === "reaction1" ? reaction1Img.current : reaction2Img.current;
           if (targetImg && combinedScale > 0.001) {
             ctx.save();
-            const size = 230;
+            const size = 207;
             const px = 270 - size / 2;
             const py = 760;
 

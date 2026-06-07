@@ -537,26 +537,26 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
 
           c.fillStyle = "#FFFFFF";
           c.beginPath();
-          c.roundRect(-192, -336, 384, 672, [12]);
+          c.roundRect(-211, -370, 422, 740, [12]);
           c.fill();
 
           if (mainVideoEl.readyState >= 2) {
             c.save();
             c.beginPath();
-            c.roundRect(-182.5, -326.5, 365, 653, [8]);
+            c.roundRect(-201, -359, 402, 718, [8]);
             c.clip();
-            c.drawImage(mainVideoEl, -182.5, -326.5, 365, 653);
+            c.drawImage(mainVideoEl, -201, -359, 402, 718);
             c.restore();
           } else {
-            drawProceduralMain(c, phaseTime, 365, 653);
+            drawProceduralMain(c, phaseTime, 402, 718);
           }
 
           if (config.instagramId) {
             c.save();
             c.fillStyle = "#1e293b";
-            c.font = "bold 29px monospace";
+            c.font = "bold 32px monospace";
             c.textAlign = "center";
-            c.fillText("@" + config.instagramId, 0, -360);
+            c.fillText("@" + config.instagramId, 0, -382);
             c.restore();
           }
           c.restore();
@@ -564,7 +564,7 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           const halfway = mainDuration / 2;
           const targetReaction = phaseTime < halfway ? reaction1 : reaction2;
           if (targetReaction) {
-            c.drawImage(targetReaction, 270 - 115, 760, 230, 230);
+            c.drawImage(targetReaction, 270 - 103.5, 760, 207, 207);
           }
         };
 
