@@ -366,6 +366,8 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
       let lastSecondValue = -1;
       let currentPlayhead = 0;
       let isRecording = true;
+      let lastExportActiveReaction = "";
+      let exportReactionScale = 1.0;
 
       const runExportLoop = async () => {
         if (cancelExportRef.current || !isRecording) {
@@ -547,9 +549,31 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           c.save();
           const swingAngle = Math.sin(phaseTime * 1.25) * 11;
           const swingRad = (swingAngle * Math.PI) / 180;
-          c.translate(270, 100);
+          
+          // Pivot calculations for footage tracking
+          const pivotX = 270;
+          const pivotY = 100;
+          const localCenterX = 0;
+          const localCenterY = 380;
+          const rotatedCenterX = localCenterX * Math.cos(swingRad) - localCenterY * Math.sin(swingRad);
+          const rotatedCenterY = localCenterX * Math.sin(swingRad) + localCenterY * Math.cos(swingRad);
+          const footageX = pivotX + rotatedCenterX;
+          const footageY = pivotY + rotatedCenterY;
+
+          c.translate(pivotX, pivotY);
           c.rotate(swingRad);
-          c.translate(0, 380);
+          c.translate(localCenterX, localCenterY);
+
+          // Render card with shadow and borders
+          c.fillStyle = "rgba(0, 0, 0, 0.08)";
+          c.beginPath();
+          c.roundRect(-218 + 10, -376 + 12, 436, 752, [16]);
+          c.fill();
+          
+          c.fillStyle = "#E4E4E7";
+          c.beginPath();
+          c.roundRect(-218, -376, 436, 752, [16]);
+          c.fill();
 
           c.fillStyle = "#FFFFFF";
           c.beginPath();
@@ -577,10 +601,140 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           }
           c.restore();
 
+          // High-parity reaction pop/transition logic
           const halfway = mainDuration / 2;
-          const targetReaction = phaseTime < halfway ? reaction1 : reaction2;
-          if (targetReaction) {
-            c.drawImage(targetReaction, 270 - 103.5, 760, 207, 207);
+          const activeReactionKey = phaseTime < halfway ? "reaction1" : "reaction2";
+          
+          let baseScale = 1.0;
+          const introFadeDuration = 0.6;
+          const outroFadeDuration = 0.6;
+
+          if (phaseTime < introFadeDuration) {
+            const t = phaseTime / introFadeDuration;
+            baseScale = Math.sin(t * Math.PI * 0.5) * 1.15 - 0.15 * (1 - t) * (1 - t);
+          } else if (phaseTime > mainDuration - outroFadeDuration) {
+            const timeLeft = mainDuration - phaseTime;
+            const t = Math.max(0, timeLeft / outroFadeDuration);
+            baseScale = t * t;
+          }
+
+          if (activeReactionKey !== lastExportActiveReaction) {
+            exportReactionScale = 0.5;
+            lastExportActiveReaction = activeReactionKey;
+          }
+          if (exportReactionScale < 1.0) {
+            exportReactionScale += (1.0 - exportReactionScale) * 0.22;
+          }
+          const combinedScale = baseScale * exportReactionScale;
+
+          const targetReaction = activeReactionKey === "reaction1" ? reaction1 : reaction2;
+          if (targetReaction && combinedScale > 0.001) {
+            c.save();
+            const size = 207;
+            const px = 270 - size / 2;
+            const py = 760;
+
+            c.fillStyle = "rgba(0, 0, 0, 0.07)";
+            c.beginPath();
+            c.arc(px + size / 2 + 5, py + size / 2 + 6, size / 2, 0, Math.PI * 2);
+            c.fill();
+
+            const originX = px + size / 2;
+            const originY = py + size / 2;
+            const sizeFactor = size / 400;
+
+            c.translate(originX, originY);
+            c.scale(combinedScale, combinedScale);
+            c.translate(-originX, -originY);
+
+            c.drawImage(targetReaction, px, py, size, size);
+
+            // Precision eye tracking and blinking parity logic
+            const reactionUrl = activeReactionKey === "reaction1" ? config.reaction1.url : config.reaction2.url;
+            const isSurprised = reactionUrl.includes("2.png") || reactionUrl.toLowerCase().includes("surprise");
+            const isShocked = reactionUrl.includes("3.png") || reactionUrl.toLowerCase().includes("shock");
+
+            const blinkPeriod = 4.0;
+            const blinkDuration = 0.28;
+            const cycleTime = phaseTime % blinkPeriod;
+            let blinkProgress = 0;
+            if (cycleTime < blinkDuration) {
+              const halfDuration = blinkDuration / 2;
+              blinkProgress = cycleTime < halfDuration ? (cycleTime / halfDuration) : ((blinkDuration - cycleTime) / halfDuration);
+            }
+
+            if (isSurprised) {
+              const drawEyeTracker = (lx: number, ly: number) => {
+                const gX = originX + (lx - originX) * combinedScale;
+                const gY = originY + (ly - originY) * combinedScale;
+                const dx = footageX - gX;
+                const dy = footageY - gY;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                const maxShift = 12 * sizeFactor;
+                const sX = (dx / dist) * maxShift;
+                const sY = (dy / dist) * maxShift;
+
+                c.fillStyle = "#F59E0B";
+                c.beginPath();
+                c.arc(lx, ly, 28 * sizeFactor, 0, Math.PI * 2);
+                c.fill();
+
+                c.fillStyle = "#0F172A";
+                c.beginPath();
+                c.ellipse(lx + sX, ly + sY, 14 * sizeFactor, 18 * sizeFactor, 0, 0, Math.PI * 2);
+                c.fill();
+
+                c.fillStyle = "#FFFFFF";
+                c.beginPath();
+                c.ellipse(lx + sX - 5 * sizeFactor, ly + sY - 6 * sizeFactor, 5 * sizeFactor, 5 * sizeFactor, 0, 0, Math.PI * 2);
+                c.fill();
+
+                if (blinkProgress > 0.1) {
+                  c.fillStyle = "#FDE68A";
+                  c.beginPath();
+                  c.ellipse(lx, ly, 30 * sizeFactor, 30 * sizeFactor * blinkProgress, 0, 0, Math.PI * 2);
+                  c.fill();
+                }
+              };
+              drawEyeTracker(px + 155 * sizeFactor, py + 175 * sizeFactor);
+              drawEyeTracker(px + 245 * sizeFactor, py + 175 * sizeFactor);
+            } else if (isShocked) {
+              const drawShockEye = (lx: number, ly: number) => {
+                const gX = originX + (lx - originX) * combinedScale;
+                const gY = originY + (ly - originY) * combinedScale;
+                const dx = footageX - gX;
+                const dy = footageY - gY;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                const maxShift = 10 * sizeFactor;
+                const sX = (dx / dist) * maxShift;
+                const sY = (dy / dist) * maxShift;
+
+                c.fillStyle = "#FFFFFF";
+                c.beginPath();
+                c.arc(lx, ly, 30 * sizeFactor, 0, Math.PI * 2);
+                c.fill();
+
+                c.fillStyle = "#000000";
+                c.beginPath();
+                c.arc(lx + sX, ly + sY, 12 * sizeFactor, 0, Math.PI * 2);
+                c.fill();
+
+                c.fillStyle = "#FFFFFF";
+                c.beginPath();
+                c.arc(lx + sX - 4 * sizeFactor, ly + sY - 4 * sizeFactor, 4 * sizeFactor, 0, Math.PI * 2);
+                c.fill();
+
+                if (blinkProgress > 0.1) {
+                  c.fillStyle = "#E5E7EB";
+                  c.beginPath();
+                  c.ellipse(lx, ly, 32 * sizeFactor, 32 * sizeFactor * blinkProgress, 0, 0, Math.PI * 2);
+                  c.fill();
+                }
+              };
+              drawShockEye(px + 145 * sizeFactor, py + 160 * sizeFactor);
+              drawShockEye(px + 252 * sizeFactor, py + 160 * sizeFactor);
+            }
+            c.restore();
           }
         };
 
