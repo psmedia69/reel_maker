@@ -503,7 +503,7 @@ export const ReelExporter: React.FC<ReelExporterProps> = ({ config }) => {
           c.fillStyle = "#FFFFFF";
           c.textAlign = "center";
           c.textBaseline = "middle";
-          const activeText = timeSec < 2.2 ? "Aaj ki princess kaun hai ?" : "";
+          const activeText = timeSec < 2.2 ? "Who's today's princess? 👑" : "";
           if (activeText) {
             c.save();
             c.fillStyle = "#FFFFFF";

@@ -538,10 +538,10 @@ export const ReelPreview: React.FC<ReelPreviewProps> = ({
           c.textAlign = "center";
           c.textBaseline = "middle";
 
-          const primaryText = "Aaj ki princess kaun hai ?";
+          const primaryText = "Who's today's princess? 👑";
           const secondaryText = "";
 
-          // Display "Aaj ki princess kaun hai ?" for the first 2.2 seconds
+          // Display "Who's today's princess? 👑" for the first 2.2 seconds
           const activeText = timeSec < 2.2 ? primaryText : secondaryText;
 
           if (activeText) {
